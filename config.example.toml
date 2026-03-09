@@ -1,0 +1,51 @@
+# aatm-cli configuration
+# Copy this file to ~/.config/aatm-cli/config.toml and fill in your values.
+
+# ─── La Cale ──────────────────────────────────────────────────────────────────
+[lacale]
+# API key from your La Cale account settings
+api_key = "YOUR_LACALE_API_KEY"
+
+# Base URL of the La Cale instance (no trailing slash)
+base_url = "https://la-cale.space"
+
+# Internal category ID for TV shows (get it from /api/external/meta).
+# Leave empty: on first run the app will fetch the list from la-cale,
+# auto-detect the right category, and save the ID here automatically.
+category_id = ""
+
+# Set to true to skip the duplicate-release check before uploading.
+skip_duplicate_check = false
+
+
+# ─── TMDB ─────────────────────────────────────────────────────────────────────
+[tmdb]
+# API key from https://www.themoviedb.org/settings/api
+api_key = "YOUR_TMDB_API_KEY"
+
+
+# ─── Torrent creation ─────────────────────────────────────────────────────────
+[torrent]
+# List of announce URLs to include in the torrent.
+# The first entry becomes the primary "announce" field; all entries go into
+# "announce-list". For La Cale, the private tracker URL should be first.
+trackers = [
+  "https://la-cale.space/announce/YOUR_PASSKEY",
+  "https://other-tracker.example.com/announce",
+]
+
+
+# ─── qBittorrent ──────────────────────────────────────────────────────────────
+[qbittorrent]
+# Web UI address (no trailing slash)
+host = "http://localhost:8080"
+username = "admin"
+password = "adminadmin"
+
+# Absolute path where finished downloads live (must exist and be writable)
+save_path = "/downloads"
+
+# Ratio at which qBittorrent will stop seeding this torrent.
+# Requires "When seeding goals are reached: Remove torrent" in qBittorrent
+# Preferences → BitTorrent.
+ratio_limit = 2.0
