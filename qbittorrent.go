@@ -16,8 +16,8 @@ import (
 
 // qbittorrentClient wraps the qBittorrent Web API v2.
 type qbittorrentClient struct {
-	cfg    QBittorrentConfig
-	http   *http.Client
+	cfg  QBittorrentConfig
+	http *http.Client
 }
 
 func newQBittorrentClient(cfg QBittorrentConfig) (*qbittorrentClient, error) {
@@ -56,9 +56,10 @@ func (c *qbittorrentClient) Login() error {
 	return nil
 }
 
-// AddTorrent uploads a .torrent file to qBittorrent with the configured save path.
-// Returns the infohash so we can later set share limits.
-func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash, savePath string) error {
+// AddTorrent uploads a .torrent file to qBittorrent.
+// The save path is intentionally NOT overridden so that qBittorrent uses
+// its own configured default download location.
+func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash string) error {
 	f, err := os.Open(torrentPath)
 	if err != nil {
 		return fmt.Errorf("opening torrent: %w", err)
@@ -74,12 +75,6 @@ func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash, savePath string) e
 	}
 	if _, err := io.Copy(part, f); err != nil {
 		return err
-	}
-
-	if savePath != "" {
-		if err := mw.WriteField("savepath", savePath); err != nil {
-			return err
-		}
 	}
 
 	// Enable auto-management so qBittorrent honours the global seeding action
@@ -134,8 +129,8 @@ func (c *qbittorrentClient) SetShareLimits(infoHash string, ratioLimit float64) 
 }
 
 // AddAndConfigureTorrent is a convenience wrapper: adds the torrent then applies the ratio limit.
-func (c *qbittorrentClient) AddAndConfigureTorrent(torrentPath, infoHash, savePath string, ratioLimit float64) error {
-	if err := c.AddTorrent(torrentPath, infoHash, savePath); err != nil {
+func (c *qbittorrentClient) AddAndConfigureTorrent(torrentPath, infoHash string, ratioLimit float64) error {
+	if err := c.AddTorrent(torrentPath, infoHash); err != nil {
 		return err
 	}
 

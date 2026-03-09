@@ -18,6 +18,21 @@ category_id = ""
 skip_duplicate_check = false
 
 
+# ─── Torr9 ────────────────────────────────────────────────────────────────────
+[torr9]
+# Bearer token from your Torr9 account settings
+api_key = "YOUR_TORR9_API_KEY"
+
+# Display category shown on the site (e.g. "Séries", "Films")
+category = "Séries"
+
+# Display sub-category (optional, e.g. "Mangas-Animes", "Animations")
+subcategory = ""
+
+# Set to true to skip the duplicate-release check before uploading.
+skip_duplicate_check = false
+
+
 # ─── TMDB ─────────────────────────────────────────────────────────────────────
 [tmdb]
 # API key from https://www.themoviedb.org/settings/api
@@ -42,8 +57,17 @@ host = "http://localhost:8080"
 username = "admin"
 password = "adminadmin"
 
-# Absolute path where finished downloads live (must exist and be writable)
-save_path = "/downloads"
+# Absolute path where finished downloads live (must exist and be writable).
+# This is the path passed to the qBittorrent API (use the path as qBittorrent sees it).
+save_path = "/mnt/stor2/qBittorrent"
+
+# If qBittorrent runs on a different machine (e.g. Linux) or via a mapped
+# network drive, set local_save_path to the path as seen by THIS machine.
+# Leave empty if both paths are the same.
+# Example (Windows host, qBittorrent on Linux via SMB mount Z:):
+#   save_path       = "/mnt/stor2/qBittorrent"   ← sent to qBittorrent API
+#   local_save_path = "Z:\\stor2\\qBittorrent"   ← used for local file move
+local_save_path = ""
 
 # Ratio at which qBittorrent will stop seeding this torrent.
 # Requires "When seeding goals are reached: Remove torrent" in qBittorrent

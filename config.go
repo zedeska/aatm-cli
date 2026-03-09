@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	LaCale      LaCaleConfig      `toml:"lacale"`
+	Torr9       Torr9Config       `toml:"torr9"`
 	TMDB        TMDBConfig        `toml:"tmdb"`
 	Torrent     TorrentConfig     `toml:"torrent"`
 	QBittorrent QBittorrentConfig `toml:"qbittorrent"`
@@ -21,11 +22,18 @@ type Config struct {
 	ConfigPath string `toml:"-"`
 }
 
+type Torr9Config struct {
+	APIKey             string `toml:"api_key"`
+	Category           string `toml:"category"`
+	Subcategory        string `toml:"subcategory"`
+	SkipDuplicateCheck bool   `toml:"skip_duplicate_check"`
+}
+
 type LaCaleConfig struct {
-	APIKey          string `toml:"api_key"`
-	BaseURL         string `toml:"base_url"`
-	CategoryID      string `toml:"category_id"`
-	SkipDuplicateCheck bool `toml:"skip_duplicate_check"`
+	APIKey             string `toml:"api_key"`
+	BaseURL            string `toml:"base_url"`
+	CategoryID         string `toml:"category_id"`
+	SkipDuplicateCheck bool   `toml:"skip_duplicate_check"`
 }
 
 type TMDBConfig struct {
@@ -37,11 +45,12 @@ type TorrentConfig struct {
 }
 
 type QBittorrentConfig struct {
-	Host       string  `toml:"host"`
-	Username   string  `toml:"username"`
-	Password   string  `toml:"password"`
-	SavePath   string  `toml:"save_path"`
-	RatioLimit float64 `toml:"ratio_limit"`
+	Host          string  `toml:"host"`
+	Username      string  `toml:"username"`
+	Password      string  `toml:"password"`
+	SavePath      string  `toml:"save_path"`
+	LocalSavePath string  `toml:"local_save_path"`
+	RatioLimit    float64 `toml:"ratio_limit"`
 }
 
 func resolveConfigPath(path string) (string, error) {

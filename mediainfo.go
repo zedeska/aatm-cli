@@ -8,17 +8,35 @@ import (
 	"strings"
 )
 
+// AudioTrackDetail holds per-track audio metadata.
+type AudioTrackDetail struct {
+	Lang     string // full name, e.g. "Japanese"
+	Codec    string // raw mediainfo value, e.g. "AAC LC"
+	Channels string // raw value, e.g. "2 channels"
+	Bitrate  string // raw value, e.g. "128 kb/s"
+}
+
+// SubtitleTrackDetail holds per-track subtitle metadata.
+type SubtitleTrackDetail struct {
+	Lang      string // full name, e.g. "French"
+	IsDefault bool
+}
+
 // NFOInfo holds key technical data extracted from the mediainfo text output.
 type NFOInfo struct {
-	Raw          string
-	VideoCodec   string
-	AudioCodec   string
-	AudioLangs   []string // all audio track languages (full names, e.g. "Japanese")
-	SubtitleLangs []string // all subtitle track languages (full names, e.g. "French")
-	HDRFormat    string   // "SDR", "HDR10", "HDR", "DV", …
-	DurationMins int
-	Width        int
-	Height       int
+	Raw             string
+	VideoCodec      string
+	AudioCodec      string
+	AudioLangs      []string // all audio track languages (full names, e.g. "Japanese")
+	SubtitleLangs   []string // all subtitle track languages (full names, e.g. "French")
+	HDRFormat       string   // "SDR", "HDR10", "HDR", "DV", …
+	DurationMins    int
+	Width           int
+	Height          int
+	ContainerFormat string             // e.g. "Matroska"
+	VideoBitrateRaw string             // e.g. "8 000 kb/s"
+	AudioDetails    []AudioTrackDetail // per-track audio info
+	SubtitleDetails []SubtitleTrackDetail
 }
 
 // GenerateNFO runs `mediainfo` on the given video file, writes the output to
@@ -79,7 +97,40 @@ func parseNFO(raw string) *NFOInfo {
 	info := &NFOInfo{Raw: raw}
 
 	sec := secUnknown
-	seenLangs := map[string]bool{}
+	seenAudioLang := map[string]bool{}
+	seenSubLang := map[string]bool{}
+
+	var currentAudio *AudioTrackDetail
+	var currentSub *SubtitleTrackDetail
+
+	flushAudio := func() {
+		if currentAudio == nil {
+			return
+		}
+		if currentAudio.Codec != "" || currentAudio.Lang != "" {
+			info.AudioDetails = append(info.AudioDetails, *currentAudio)
+			if info.AudioCodec == "" && currentAudio.Codec != "" {
+				info.AudioCodec = normalizeAudioCodec(currentAudio.Codec)
+			}
+			if currentAudio.Lang != "" && !seenAudioLang[currentAudio.Lang] {
+				info.AudioLangs = append(info.AudioLangs, currentAudio.Lang)
+				seenAudioLang[currentAudio.Lang] = true
+			}
+		}
+		currentAudio = nil
+	}
+
+	flushSub := func() {
+		if currentSub == nil {
+			return
+		}
+		if currentSub.Lang != "" && !seenSubLang[currentSub.Lang] {
+			info.SubtitleDetails = append(info.SubtitleDetails, *currentSub)
+			info.SubtitleLangs = append(info.SubtitleLangs, currentSub.Lang)
+			seenSubLang[currentSub.Lang] = true
+		}
+		currentSub = nil
+	}
 
 	for _, line := range strings.Split(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -94,14 +145,26 @@ func parseNFO(raw string) *NFOInfo {
 			base = strings.TrimSpace(base)
 			switch strings.ToLower(base) {
 			case "general":
+				flushAudio()
+				flushSub()
 				sec = secGeneral
 			case "video":
+				flushAudio()
+				flushSub()
 				sec = secVideo
 			case "audio":
+				flushAudio()
+				flushSub()
+				currentAudio = &AudioTrackDetail{}
 				sec = secAudio
 			case "text":
+				flushAudio()
+				flushSub()
+				currentSub = &SubtitleTrackDetail{}
 				sec = secText
 			default:
+				flushAudio()
+				flushSub()
 				sec = secUnknown
 			}
 			continue
@@ -117,8 +180,15 @@ func parseNFO(raw string) *NFOInfo {
 
 		switch sec {
 		case secGeneral:
-			if lkey == "duration" && info.DurationMins == 0 {
-				info.DurationMins = parseDurationMins(value)
+			switch lkey {
+			case "format":
+				if info.ContainerFormat == "" {
+					info.ContainerFormat = value
+				}
+			case "duration":
+				if info.DurationMins == 0 {
+					info.DurationMins = parseDurationMins(value)
+				}
 			}
 
 		case secVideo:
@@ -139,6 +209,10 @@ func parseNFO(raw string) *NFOInfo {
 					fmt.Sscanf(strings.ReplaceAll(value, " ", ""), "%d", &h)
 					info.Height = h
 				}
+			case "bit rate":
+				if info.VideoBitrateRaw == "" {
+					info.VideoBitrateRaw = value
+				}
 			case "hdr format":
 				if info.HDRFormat == "" {
 					info.HDRFormat = normalizeHDRFormat(value)
@@ -150,29 +224,48 @@ func parseNFO(raw string) *NFOInfo {
 			}
 
 		case secAudio:
+			if currentAudio == nil {
+				currentAudio = &AudioTrackDetail{}
+			}
 			switch lkey {
 			case "format":
-				if info.AudioCodec == "" && isAudioCodec(value) {
-					info.AudioCodec = normalizeAudioCodec(value)
+				if currentAudio.Codec == "" && isAudioCodec(value) {
+					currentAudio.Codec = value
+				}
+			case "channel(s)":
+				if currentAudio.Channels == "" {
+					currentAudio.Channels = value
+				}
+			case "bit rate":
+				if currentAudio.Bitrate == "" {
+					currentAudio.Bitrate = value
 				}
 			case "language":
-				lang := normalizeLangName(value)
-				if lang != "" && !seenLangs["a:"+lang] {
-					info.AudioLangs = append(info.AudioLangs, lang)
-					seenLangs["a:"+lang] = true
+				if currentAudio.Lang == "" {
+					currentAudio.Lang = normalizeLangName(value)
 				}
 			}
 
 		case secText:
-			if lkey == "language" {
-				lang := normalizeLangName(value)
-				if lang != "" && !seenLangs["s:"+lang] {
-					info.SubtitleLangs = append(info.SubtitleLangs, lang)
-					seenLangs["s:"+lang] = true
+			if currentSub == nil {
+				currentSub = &SubtitleTrackDetail{}
+			}
+			switch lkey {
+			case "language":
+				if currentSub.Lang == "" {
+					currentSub.Lang = normalizeLangName(value)
+				}
+			case "default":
+				if strings.EqualFold(value, "yes") {
+					currentSub.IsDefault = true
 				}
 			}
 		}
 	}
+
+	// Flush any remaining in-progress track
+	flushAudio()
+	flushSub()
 
 	// Default to SDR when no HDR info was found
 	if info.HDRFormat == "" {
@@ -341,4 +434,92 @@ func parseDurationMins(s string) int {
 		return ms / 60000
 	}
 	return 0
+}
+
+// BuildAudioString builds a human-readable audio description for the first
+// audio track, e.g. "Japanese — AAC LC 2.0 @ 128 kb/s".
+func (info *NFOInfo) BuildAudioString() string {
+	if len(info.AudioDetails) == 0 {
+		return ""
+	}
+	t := info.AudioDetails[0]
+
+	codecPart := t.Codec
+	if t.Channels != "" {
+		if dec := channelsToDecimal(t.Channels); dec != "" {
+			if codecPart != "" {
+				codecPart += " " + dec
+			} else {
+				codecPart = dec
+			}
+		}
+	}
+	if t.Bitrate != "" {
+		if codecPart != "" {
+			codecPart += " @ " + t.Bitrate
+		} else {
+			codecPart = t.Bitrate
+		}
+	}
+
+	if t.Lang != "" && codecPart != "" {
+		return t.Lang + " — " + codecPart
+	}
+	if t.Lang != "" {
+		return t.Lang
+	}
+	return codecPart
+}
+
+// BuildSubtitlesString builds a human-readable subtitle list,
+// e.g. "French (Defaut), English".
+func (info *NFOInfo) BuildSubtitlesString() string {
+	if len(info.SubtitleDetails) == 0 {
+		return ""
+	}
+
+	// If no track explicitly has IsDefault set, treat the first one as default.
+	hasDefault := false
+	for _, s := range info.SubtitleDetails {
+		if s.IsDefault {
+			hasDefault = true
+			break
+		}
+	}
+
+	parts := make([]string, 0, len(info.SubtitleDetails))
+	for i, s := range info.SubtitleDetails {
+		lang := s.Lang
+		if s.IsDefault || (!hasDefault && i == 0) {
+			lang += " (Defaut)"
+		}
+		parts = append(parts, lang)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// channelsToDecimal converts a channel count string like "2 channels" to
+// the decimal notation used in audio descriptions, e.g. "2.0", "5.1".
+func channelsToDecimal(s string) string {
+	var n int
+	fmt.Sscanf(s, "%d", &n)
+	switch n {
+	case 1:
+		return "1.0"
+	case 2:
+		return "2.0"
+	case 3:
+		return "2.1"
+	case 4:
+		return "4.0"
+	case 6:
+		return "5.1"
+	case 8:
+		return "7.1"
+	default:
+		if n > 0 {
+			return fmt.Sprintf("%d.0", n)
+		}
+		return ""
+	}
 }
