@@ -59,7 +59,24 @@ func (c *qbittorrentClient) Login() error {
 // AddTorrent uploads a .torrent file to qBittorrent.
 // The save path is intentionally NOT overridden so that qBittorrent uses
 // its own configured default download location.
+// On a 403 (expired session) it re-authenticates and retries once.
 func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash string) error {
+	err := c.addTorrentOnce(torrentPath)
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "403") {
+		return err
+	}
+	// Session expired — re-login and retry.
+	logf("  qBittorrent session expired, re-logging in...")
+	if loginErr := c.Login(); loginErr != nil {
+		return fmt.Errorf("re-login failed: %w", loginErr)
+	}
+	return c.addTorrentOnce(torrentPath)
+}
+
+func (c *qbittorrentClient) addTorrentOnce(torrentPath string) error {
 	f, err := os.Open(torrentPath)
 	if err != nil {
 		return fmt.Errorf("opening torrent: %w", err)
@@ -91,6 +108,8 @@ func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Origin", c.cfg.Host)
+	req.Header.Set("Referer", c.cfg.Host)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -115,7 +134,15 @@ func (c *qbittorrentClient) SetShareLimits(infoHash string, ratioLimit float64) 
 	form.Set("seedingTimeLimit", "-2")         // use global
 	form.Set("inactiveSeedingTimeLimit", "-2") // use global
 
-	resp, err := c.http.PostForm(c.cfg.Host+"/api/v2/torrents/setShareLimits", form)
+	req, err := http.NewRequest(http.MethodPost, c.cfg.Host+"/api/v2/torrents/setShareLimits", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("setShareLimits failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", c.cfg.Host)
+	req.Header.Set("Referer", c.cfg.Host)
+
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("setShareLimits failed: %w", err)
 	}
