@@ -40,21 +40,11 @@ func main() {
 			fatalf("--watcher requires --path to be a directory")
 		}
 
-		// Pre-flight: ensure at least one tracker is usable
-		hasLaCale := lacaleAvailable(cfg)
-		hasTorr9 := torr9Available(cfg)
-		if !hasLaCale && !hasTorr9 {
-			fatalf("watcher mode requires at least one tracker to be fully configured (lacale or torr9)")
+		// Pre-flight: ensure torr9 is configured
+		if !torr9Available(cfg) {
+			fatalf("watcher mode requires torr9 to be fully configured (api_key, category, tmdb.api_key)")
 		}
-		if hasLaCale {
-			if err := ensureCategoryID(cfg); err != nil {
-				fatalf("could not determine la-cale category: %v", err)
-			}
-			logf("Watcher: la-cale enabled")
-		}
-		if hasTorr9 {
-			logf("Watcher: torr9 enabled")
-		}
+		logf("Watcher: torr9 enabled")
 
 		qbt, err := newQBittorrentClient(cfg.QBittorrent)
 		if err != nil {
@@ -160,6 +150,13 @@ func processFile(mkvPath, tracker string, cfg *Config, qbt *qbittorrentClient) e
 	}
 	logf("  NFO written: %s", filepath.Base(nfoPath))
 
+	// Validate subtitles: must have French + English
+	if err := validateSubtitles(nfoInfo); err != nil {
+		logf("  [ERROR] %v — cleaning up", err)
+		os.Remove(nfoPath)
+		return err
+	}
+
 	// ── 3. Create .torrent ───────────────────────────────────────────────────
 	logf("  Creating .torrent file...")
 	torrentOpts := TorrentOptions{
@@ -204,22 +201,22 @@ func processFile(mkvPath, tracker string, cfg *Config, qbt *qbittorrentClient) e
 		if err := os.Remove(nfoPath); err != nil {
 			logf("  warning: could not delete NFO: %v", err)
 		}
-
-		// ── Move video BEFORE adding to qBittorrent ───────────────────────
-		// qBittorrent must find the file at save_path at the moment the
-		// torrent is added so that seeding starts immediately.
-		if localMovePath(cfg.QBittorrent) != "" {
-			dest := filepath.Join(localMovePath(cfg.QBittorrent), filepath.Base(mkvPath))
-			logf("  Moving video to %s...", dest)
-			if err := moveFile(mkvPath, dest); err != nil {
-				return fmt.Errorf("moving video: %w", err)
-			}
-			mkvPath = dest // mark as moved so step 6 is skipped
-		}
 	}
 
-	// ── 5. Add to qBittorrent ────────────────────────────────────────────────
-	logf("  Adding torrent to qBittorrent (save path: %s)...", cfg.QBittorrent.SavePath)
+	// ── 5. Move video BEFORE adding to qBittorrent ───────────────────────────
+	// The file must already be at save_path when the torrent is added so that
+	// qBittorrent can start seeding immediately (skip_checking=true).
+	if localMovePath(cfg.QBittorrent) != "" {
+		dest := filepath.Join(localMovePath(cfg.QBittorrent), filepath.Base(mkvPath))
+		logf("  Moving video to %s...", dest)
+		if err := moveFile(mkvPath, dest); err != nil {
+			return fmt.Errorf("moving video: %w", err)
+		}
+		mkvPath = dest
+	}
+
+	// ── 6. Add to qBittorrent ────────────────────────────────────────────────
+	logf("  Adding torrent to qBittorrent...")
 	if err := qbt.AddAndConfigureTorrent(torrentPath, infoHash, cfg.QBittorrent.RatioLimit); err != nil {
 		return fmt.Errorf("qBittorrent: %w", err)
 	}
@@ -228,17 +225,6 @@ func processFile(mkvPath, tracker string, cfg *Config, qbt *qbittorrentClient) e
 	// Delete the local .torrent file now that qBittorrent has it.
 	if err := os.Remove(torrentPath); err != nil {
 		logf("  warning: could not delete torrent file: %v", err)
-	}
-
-	// ── 6. Move video to save path (lacale / default) ─────────────────────────
-	// Skipped for torr9: already moved above before the qBittorrent add.
-	if tracker != "torr9" && localMovePath(cfg.QBittorrent) != "" {
-		dest := filepath.Join(localMovePath(cfg.QBittorrent), filepath.Base(mkvPath))
-		logf("  Moving video to %s...", dest)
-		if err := moveFile(mkvPath, dest); err != nil {
-			return fmt.Errorf("moving video: %w", err)
-		}
-		logf("  Done.")
 	}
 
 	return nil
@@ -512,4 +498,28 @@ func logf(format string, args ...interface{}) {
 func fatalf(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// validateSubtitles ensures the NFO has both French and English subtitle tracks.
+func validateSubtitles(nfo *NFOInfo) error {
+	if len(nfo.SubtitleLangs) < 2 {
+		return fmt.Errorf("subtitles validation: only %d track(s) found (need 2: French + English)", len(nfo.SubtitleLangs))
+	}
+
+	hasFrench := false
+	hasEnglish := false
+	for _, lang := range nfo.SubtitleLangs {
+		if lang == "French" {
+			hasFrench = true
+		}
+		if lang == "English" {
+			hasEnglish = true
+		}
+	}
+
+	if !hasFrench || !hasEnglish {
+		return fmt.Errorf("subtitles validation: found %v (need French + English)", nfo.SubtitleLangs)
+	}
+
+	return nil
 }

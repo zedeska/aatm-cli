@@ -57,8 +57,6 @@ func (c *qbittorrentClient) Login() error {
 }
 
 // AddTorrent uploads a .torrent file to qBittorrent.
-// The save path is intentionally NOT overridden so that qBittorrent uses
-// its own configured default download location.
 // On a 403 (expired session) it re-authenticates and retries once.
 func (c *qbittorrentClient) AddTorrent(torrentPath, infoHash string) error {
 	err := c.addTorrentOnce(torrentPath)
@@ -96,6 +94,10 @@ func (c *qbittorrentClient) addTorrentOnce(torrentPath string) error {
 
 	// Enable auto-management so qBittorrent honours the global seeding action
 	if err := mw.WriteField("autoTMM", "false"); err != nil {
+		return err
+	}
+	// Skip initial hash check — file is already in place, start seeding immediately.
+	if err := mw.WriteField("skip_checking", "true"); err != nil {
 		return err
 	}
 
@@ -155,18 +157,77 @@ func (c *qbittorrentClient) SetShareLimits(infoHash string, ratioLimit float64) 
 	return nil
 }
 
-// AddAndConfigureTorrent is a convenience wrapper: adds the torrent then applies the ratio limit.
+// SetSuperSeeding enables super-seeding (initial seeding) on an already-added torrent.
+func (c *qbittorrentClient) SetSuperSeeding(infoHash string) error {
+	form := url.Values{}
+	form.Set("hashes", infoHash)
+	form.Set("value", "true")
+
+	req, err := http.NewRequest(http.MethodPost, c.cfg.Host+"/api/v2/torrents/setSuperSeeding", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", c.cfg.Host)
+	req.Header.Set("Referer", c.cfg.Host)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("setSuperSeeding returned %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Reannounce forces an immediate re-announce to all trackers for the torrent.
+func (c *qbittorrentClient) Reannounce(infoHash string) error {
+	form := url.Values{}
+	form.Set("hashes", infoHash)
+
+	req, err := http.NewRequest(http.MethodPost, c.cfg.Host+"/api/v2/torrents/reannounce", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", c.cfg.Host)
+	req.Header.Set("Referer", c.cfg.Host)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("reannounce returned %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// AddAndConfigureTorrent is a convenience wrapper: adds the torrent, applies the ratio limit,
+// enables super-seeding, and forces a re-announce.
 func (c *qbittorrentClient) AddAndConfigureTorrent(torrentPath, infoHash string, ratioLimit float64) error {
 	if err := c.AddTorrent(torrentPath, infoHash); err != nil {
 		return err
 	}
 
-	// qBittorrent needs a moment before it accepts setShareLimits for a new hash
+	// qBittorrent needs a moment before it accepts post-add API calls for a new hash.
 	time.Sleep(2 * time.Second)
 
 	if err := c.SetShareLimits(infoHash, ratioLimit); err != nil {
-		// non-fatal – log warning but don't abort
 		fmt.Printf("warning: could not set ratio limit: %v\n", err)
+	}
+	if err := c.SetSuperSeeding(infoHash); err != nil {
+		fmt.Printf("warning: could not enable super-seeding: %v\n", err)
+	}
+	if err := c.Reannounce(infoHash); err != nil {
+		fmt.Printf("warning: could not reannounce: %v\n", err)
 	}
 	return nil
 }

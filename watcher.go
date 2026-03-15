@@ -26,15 +26,6 @@ func markSeen(path string) bool {
 	return true
 }
 
-// lacaleAvailable returns true if the config contains the minimum fields needed
-// for a la-cale upload.
-func lacaleAvailable(cfg *Config) bool {
-	return cfg.LaCale.APIKey != "" &&
-		cfg.LaCale.BaseURL != "" &&
-		cfg.TMDB.APIKey != "" &&
-		len(cfg.Torrent.Trackers) > 0
-}
-
 // torr9Available returns true if the config contains the minimum fields needed
 // for a torr9 upload.
 func torr9Available(cfg *Config) bool {
@@ -54,7 +45,7 @@ func watchDirectory(dir string, cfg *Config, qbt *qbittorrentClient) {
 		} else {
 			for _, path := range files {
 				if markSeen(path) {
-					go processFileDualTracker(path, cfg, qbt)
+					go processFileWatcher(path, cfg, qbt)
 				}
 			}
 		}
@@ -62,10 +53,8 @@ func watchDirectory(dir string, cfg *Config, qbt *qbittorrentClient) {
 	}
 }
 
-// processFileDualTracker runs the full upload pipeline for a single .mkv file
-// and publishes it to every configured tracker (la-cale and/or torr9).
-// A failure on one tracker is non-fatal: the other upload still proceeds.
-func processFileDualTracker(mkvPath string, cfg *Config, qbt *qbittorrentClient) {
+// processFileWatcher runs the full torr9 upload pipeline for a single .mkv file.
+func processFileWatcher(mkvPath string, cfg *Config, qbt *qbittorrentClient) {
 	base := filepath.Base(mkvPath)
 	logf("─── [watcher] Processing: %s", base)
 
@@ -87,30 +76,22 @@ func processFileDualTracker(mkvPath string, cfg *Config, qbt *qbittorrentClient)
 	}
 	logf("  NFO written: %s", filepath.Base(nfoPath))
 
-	// ── 3. Create torrent for la-cale (with source + trackers) ───────────────
-	stem := mkvPath[:len(mkvPath)-len(filepath.Ext(mkvPath))]
-	lacaleTorrentPath := stem + "-lacale.torrent"
-	torr9TorrentPath := stem + "-torr9.torrent"
-
-	var lacaleTorrentOK, torr9TorrentOK bool
-	var lacaleInfoHash string
-
-	if lacaleAvailable(cfg) {
-		_, lacaleInfoHash, err = CreateTorrent(mkvPath, TorrentOptions{
-			Trackers:   cfg.Torrent.Trackers,
-			Source:     "lacale",
-			OutputPath: lacaleTorrentPath,
-		})
-		if err != nil {
-			logf("  [WARN] could not create la-cale torrent: %v", err)
-		} else {
-			lacaleTorrentOK = true
-			logf("  La-cale torrent: %s", filepath.Base(lacaleTorrentPath))
-		}
+	// Validate subtitles: must have French + English
+	if err := validateSubtitles(nfoInfo); err != nil {
+		logf("  [ERROR] %s: %v — cleaning up", base, err)
+		os.Remove(nfoPath)
+		return
 	}
 
+	// ── 3. Create torr9 torrent (no trackers) ─────────────────────────────────
+	stem := mkvPath[:len(mkvPath)-len(filepath.Ext(mkvPath))]
+	torr9TorrentPath := stem + "-torr9.torrent"
+
+	var torr9TorrentOK bool
+	var torr9InfoHash string
+
 	if torr9Available(cfg) {
-		_, _, err = CreateTorrent(mkvPath, TorrentOptions{OutputPath: torr9TorrentPath})
+		_, torr9InfoHash, err = CreateTorrent(mkvPath, TorrentOptions{OutputPath: torr9TorrentPath})
 		if err != nil {
 			logf("  [WARN] could not create torr9 torrent: %v", err)
 		} else {
@@ -119,20 +100,8 @@ func processFileDualTracker(mkvPath string, cfg *Config, qbt *qbittorrentClient)
 		}
 	}
 
-	// ── 4. Upload to la-cale ──────────────────────────────────────────────────
-	lacaleUploadOK := false
-	if lacaleTorrentOK {
-		if err := uploadToLaCale(mkvPath, fi, nfoInfo, nfoPath, lacaleTorrentPath, cfg); err != nil {
-			logf("  [WARN] la-cale upload failed: %v", err)
-		} else {
-			lacaleUploadOK = true
-			logf("  La-cale upload: OK")
-		}
-	}
-
-	// ── 5. Upload to torr9 ────────────────────────────────────────────────────
+	// ── 4. Upload to torr9 ────────────────────────────────────────────────────
 	torr9UploadOK := false
-	var torr9InfoHash string
 	if torr9TorrentOK {
 		torr9InfoHash, err = uploadToTorr9(mkvPath, fi, nfoInfo, torr9TorrentPath, cfg)
 		if err != nil {
@@ -143,36 +112,28 @@ func processFileDualTracker(mkvPath string, cfg *Config, qbt *qbittorrentClient)
 		}
 	}
 
-	// ── 6. Delete NFO ─────────────────────────────────────────────────────────
+	// ── 5. Delete NFO ─────────────────────────────────────────────────────────
 	if err := os.Remove(nfoPath); err != nil {
 		logf("  warning: could not delete NFO: %v", err)
 	}
 
-	if !lacaleUploadOK && !torr9UploadOK {
-		logf("[ERROR] %s: all uploads failed — skipping qBittorrent and file move", base)
-		// Clean up torrent files before returning
-		if lacaleTorrentOK {
-			os.Remove(lacaleTorrentPath)
-		}
+	if !torr9UploadOK {
+		logf("[ERROR] %s: torr9 upload failed — skipping qBittorrent and file move", base)
 		if torr9TorrentOK {
 			os.Remove(torr9TorrentPath)
 		}
 		return
 	}
 
-	// ── 7. Move video to save path ────────────────────────────────────────────
+	// ── 6. Move video to save path ────────────────────────────────────────────
 	// torr9 requires the file to be present at the save path before the torrent
-	// is added to qBittorrent.  Moving it here satisfies that for both trackers.
+	// is added to qBittorrent.
 	movePath := localMovePath(cfg.QBittorrent)
 	if movePath != "" {
 		dest := filepath.Join(movePath, filepath.Base(mkvPath))
 		logf("  Moving video to %s...", dest)
 		if err := moveFile(mkvPath, dest); err != nil {
 			logf("[ERROR] %s: moving video: %v", base, err)
-			// Clean up torrent files before returning
-			if lacaleTorrentOK {
-				os.Remove(lacaleTorrentPath)
-			}
 			if torr9TorrentOK {
 				os.Remove(torr9TorrentPath)
 			}
@@ -180,29 +141,18 @@ func processFileDualTracker(mkvPath string, cfg *Config, qbt *qbittorrentClient)
 		}
 	}
 
-	// ── 8. Add torrents to qBittorrent ────────────────────────────────────────
-	if lacaleUploadOK {
-		logf("  Adding la-cale torrent to qBittorrent...")
-		if err := qbt.AddAndConfigureTorrent(lacaleTorrentPath, lacaleInfoHash, cfg.QBittorrent.RatioLimit); err != nil {
-			logf("  warning: qBittorrent (la-cale): %v", err)
-		}
-	}
+	// ── 7. Add torrent to qBittorrent ────────────────────────────────────────
 	if torr9UploadOK {
-		logf("  Adding torr9 torrent to qBittorrent...")
+		logf("  Adding torrent to qBittorrent...")
 		if err := qbt.AddAndConfigureTorrent(torr9TorrentPath, torr9InfoHash, cfg.QBittorrent.RatioLimit); err != nil {
-			logf("  warning: qBittorrent (torr9): %v", err)
+			logf("  warning: qBittorrent: %v", err)
 		}
 	}
 
-	// ── 9. Delete local torrent files ─────────────────────────────────────────
-	if lacaleTorrentOK {
-		if err := os.Remove(lacaleTorrentPath); err != nil {
-			logf("  warning: could not delete la-cale torrent: %v", err)
-		}
-	}
+	// ── 8. Delete local torrent file ─────────────────────────────────────────
 	if torr9TorrentOK {
 		if err := os.Remove(torr9TorrentPath); err != nil {
-			logf("  warning: could not delete torr9 torrent: %v", err)
+			logf("  warning: could not delete torrent: %v", err)
 		}
 	}
 
