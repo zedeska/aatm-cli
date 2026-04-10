@@ -33,9 +33,11 @@ type FileInfo struct {
 }
 
 // Pattern: ${seriesTitle}.S${season}E${episode}.VOSTFR.${height}p.WEB-DL.H264-ZED
+// Also accepts: WEBRiP, AV1, etc.
 // e.g.  My.Show.Name.S02E05.VOSTFR.1080p.WEB-DL.H264-ZED
+//       My.Show.Name.S02E05.VOSTFR.1080p.WEBRiP.AV1-ZED
 var filenameRe = regexp.MustCompile(
-	`(?i)^(.+?)\.S(\d{2})E(\d{2,3})\.(VOSTFR|VFF|VF|VOSTA)\.([\d]+)p\.(WEB-DL|WEBRIP|BLURAY|HDTV|DVDRIP)\.(H264|H265|X264|X265|HEVC|AVC)-(.+)$`,
+	`(?i)^(.+?)\.S(\d{2})E(\d{2,3})\.(VOSTFR|VFF|VF|VOSTA)\.([\d]+)p\.(WEB-DL|WEBRIP|BLURAY|HDTV|DVDRIP)\.(H264|H265|X264|X265|HEVC|AVC|AV1)-(.+)$`,
 )
 
 // ParseFilename parses a release filename (with or without .mkv extension)
